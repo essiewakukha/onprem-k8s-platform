@@ -1,0 +1,86 @@
+name: CI
+
+# Runs on GitHub-hosted runners: no cluster or registry access needed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  HELM_VERSION: v4.3.0
+  KUBERNETES_VERSION: 1.36.0
+
+jobs:
+  app:
+    name: App tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm test
+        working-directory: app
+
+  image:
+    name: Image builds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build (tests run inside the Dockerfile)
+        run: docker build -t notes-api:ci app
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+      - name: helm lint
+        run: helm lint charts/notes-api --strict -f charts/notes-api/values-production.yaml
+      - name: Render and validate against the Kubernetes schema
+        run: |
+          helm template notes-api charts/notes-api \
+            -f charts/notes-api/values-production.yaml --set image.tag=ci \
+            | kubeconform -strict -summary -kubernetes-version "${KUBERNETES_VERSION}"
+      - name: Guard rails reject unsafe values
+        run: |
+          # RWO volume + several replicas must fail to render
+          ! helm template x charts/notes-api --set persistence.accessMode=ReadWriteOnce 2>/dev/null
+          # ':latest' must be rejected by the values schema
+          ! helm template x charts/notes-api --set image.tag=latest 2>/dev/null
+      - name: Validate platform manifests
+        run: kubeconform -strict -summary -kubernetes-version "${KUBERNETES_VERSION}" platform/
+
+  ansible:
+    name: Ansible
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: cp inventory/hosts.ini.example inventory/hosts.ini
+      - run: ansible-playbook site.yml --syntax-check
+      - run: ansible-lint site.yml reset.yml
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: shellcheck scripts/*.sh lab/*.sh

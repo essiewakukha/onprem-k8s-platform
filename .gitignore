@@ -1,0 +1,17 @@
+# Credentials and cluster-specific state never go to git
+artifacts/
+ansible/inventory/hosts.ini
+lab/lab-vars.yml
+*.kubeconfig
+kubeconfig*
+*.pem
+*.key
+
+# Local tooling
+node_modules/
+app/data/
+.venv/
+__pycache__/
+*.retry
+.DS_Store
+.ansible/
