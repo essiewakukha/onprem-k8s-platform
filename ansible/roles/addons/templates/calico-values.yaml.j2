@@ -1,0 +1,14 @@
+# Managed by Ansible (k8s-platform)
+installation:
+  cni:
+    type: Calico
+  calicoNetwork:
+    bgp: Disabled
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: "{{ pod_cidr }}"
+        blockSize: 26
+        # VXLAN works on any flat VM network without BGP peering.
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()

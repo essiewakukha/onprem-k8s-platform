@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Managed by Ansible (k8s-platform). Snapshots etcd and the cluster PKI.
+# Restore procedure: docs/operations.md#restoring-etcd
+set -Eeuo pipefail
+
+BACKUP_DIR="{{ etcd_backup_dir }}"
+RETENTION_DAYS="{{ etcd_backup_retention_days }}"
+NODE="$(hostname)"
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+export KUBECONFIG=/etc/kubernetes/admin.conf
+
+# /var/lib/etcd is a hostPath mount in the etcd static pod, so a snapshot
+# written there inside the container lands on the host.
+kubectl -n kube-system exec "etcd-${NODE}" -- etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save "/var/lib/etcd/snapshot-${TS}.db"
+
+mv "/var/lib/etcd/snapshot-${TS}.db" "${BACKUP_DIR}/etcd-${TS}.db"
+tar -czf "${BACKUP_DIR}/pki-${TS}.tar.gz" -C /etc/kubernetes pki
+chmod 600 "${BACKUP_DIR}/etcd-${TS}.db" "${BACKUP_DIR}/pki-${TS}.tar.gz"
+
+find "${BACKUP_DIR}" -type f \( -name 'etcd-*.db' -o -name 'pki-*.tar.gz' \) \
+  -mtime +"${RETENTION_DAYS}" -delete
+
+echo "etcd snapshot written: ${BACKUP_DIR}/etcd-${TS}.db"

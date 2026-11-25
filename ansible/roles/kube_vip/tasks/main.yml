@@ -1,0 +1,32 @@
+---
+# Generates the kube-vip static pod with kube-vip's own generator so the
+# manifest always matches the pinned image version.
+# Expects: kube_vip_kubeconfig (admin.conf, or super-admin.conf on first init)
+
+- name: Ensure static pod manifest directory exists
+  ansible.builtin.file:
+    path: /etc/kubernetes/manifests
+    state: directory
+    mode: "0755"
+
+- name: Pull kube-vip image
+  ansible.builtin.command: ctr image pull ghcr.io/kube-vip/kube-vip:{{ kube_vip_version }}
+  changed_when: true
+
+- name: Generate kube-vip manifest (ARP mode, control-plane VIP only)
+  ansible.builtin.command: >-
+    ctr run --rm --net-host ghcr.io/kube-vip/kube-vip:{{ kube_vip_version }} kube-vip-gen
+    /kube-vip manifest pod
+    --interface {{ kube_vip_interface }}
+    --address {{ kube_vip_address }}
+    --controlplane
+    --arp
+    --leaderElection
+  register: kube_vip_manifest
+  changed_when: false
+
+- name: Write kube-vip static pod
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/manifests/kube-vip.yaml
+    mode: "0600"
+    content: "{{ kube_vip_manifest.stdout | regex_replace('/etc/kubernetes/admin.conf', kube_vip_kubeconfig) }}\n"

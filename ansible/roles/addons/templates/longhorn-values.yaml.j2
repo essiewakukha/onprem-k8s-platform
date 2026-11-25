@@ -1,0 +1,18 @@
+# Managed by Ansible (k8s-platform)
+persistence:
+  defaultClass: true
+  # Each volume keeps this many replicas on different nodes, so losing a
+  # node does not lose data.
+  defaultClassReplicaCount: {{ longhorn_replica_count }}
+  # Keep the underlying volume if a PVC is deleted by mistake.
+  reclaimPolicy: Retain
+
+defaultSettings:
+  # When a node goes down, force-delete pods stuck in Terminating that hold a
+  # Longhorn volume so they can reattach elsewhere without a human.
+  nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+  # Never place two replicas of one volume on the same node.
+  replicaSoftAntiAffinity: false
+
+longhornUI:
+  replicas: 1

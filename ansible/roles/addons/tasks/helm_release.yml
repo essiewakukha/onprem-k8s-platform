@@ -1,0 +1,33 @@
+---
+# Idempotent Helm release: only runs `helm upgrade` when the rendered values
+# changed or the deployed chart version differs from the pin.
+# Inputs: release, release_namespace, chart_ref, chart_name, chart_version, values_template
+
+- name: Render Helm values for {{ release }}
+  ansible.builtin.template:
+    src: "{{ values_template }}"
+    dest: "/etc/k8s-platform/addons/{{ release }}-values.yaml"
+    mode: "0600"
+  register: release_values
+
+- name: Read deployed chart version of {{ release }}
+  ansible.builtin.shell: |
+    set -o pipefail
+    helm list --namespace {{ release_namespace }} --filter '^{{ release }}$' --output json \
+      | jq -r '.[0].chart // ""'
+  args:
+    executable: /bin/bash
+  register: deployed_chart
+  changed_when: false
+
+- name: Install or upgrade pinned chart for {{ release }}
+  ansible.builtin.command: >-
+    helm upgrade --install {{ release }} {{ chart_ref }}
+    --namespace {{ release_namespace }} --create-namespace
+    --version {{ chart_version }}
+    --values /etc/k8s-platform/addons/{{ release }}-values.yaml
+    --wait --timeout 15m
+  when: >-
+    release_values.changed
+    or deployed_chart.stdout != (chart_name ~ '-' ~ chart_version)
+  changed_when: true

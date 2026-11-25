@@ -1,0 +1,47 @@
+# Managed by Ansible (k8s-platform)
+# Traefik replaces the retired community ingress-nginx and serves standard
+# networking.k8s.io/v1 Ingress objects (and Gateway API later, if wanted).
+deployment:
+  replicas: 2
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+  name: traefik
+
+providers:
+  kubernetesIngress:
+    enabled: true
+    publishedService:
+      enabled: true
+  kubernetesCRD:
+    enabled: true
+
+service:
+  type: LoadBalancer
+
+# Keep the two replicas on different nodes.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+
+# Reschedule off a dead node after 30s instead of the 300s default.
+tolerations:
+  - key: node.kubernetes.io/not-ready
+    operator: Exists
+    effect: NoExecute
+    tolerationSeconds: 30
+  - key: node.kubernetes.io/unreachable
+    operator: Exists
+    effect: NoExecute
+    tolerationSeconds: 30

@@ -1,0 +1,15 @@
+{
+  "name": "notes-api",
+  "version": "1.0.0",
+  "description": "Demo workload for the on-prem Kubernetes platform: health/readiness probes, graceful shutdown, PV-backed state.",
+  "main": "src/server.js",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  }
+}

@@ -1,0 +1,22 @@
+---
+# Applies the cluster-admin-owned baseline from platform/ in this repo:
+# namespace + Pod Security, RBAC for CI and viewers, default-deny policies.
+
+- name: Copy platform manifests to the control-plane node
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../platform/"
+    dest: /etc/k8s-platform/platform/
+    mode: "0600"
+    directory_mode: "0700"
+
+- name: Apply platform baseline (server-side apply)
+  ansible.builtin.command: >-
+    kubectl apply --server-side --field-manager=k8s-platform
+    -R -f /etc/k8s-platform/platform/
+  register: platform_apply
+  changed_when: "'serverside-applied' in platform_apply.stdout"
+
+- name: Confirm default-deny is in force for the app namespace
+  ansible.builtin.command: >-
+    kubectl -n {{ app_namespace }} get networkpolicy default-deny-all
+  changed_when: false

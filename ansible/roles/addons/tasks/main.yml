@@ -1,0 +1,149 @@
+---
+- name: Create add-on values directory
+  ansible.builtin.file:
+    path: /etc/k8s-platform/addons
+    state: directory
+    mode: "0700"
+
+# ---------------------------------------------------------------- Helm CLI
+- name: Read installed Helm version
+  ansible.builtin.command: helm version --short
+  register: helm_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install pinned Helm {{ helm_version }}
+  when: helm_installed.rc != 0 or not helm_installed.stdout.startswith(helm_version)
+  vars:
+    helm_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    helm_tarball: "helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz"
+  block:
+    - name: Download Helm and verify its published checksum
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/{{ helm_tarball }}"
+        checksum: "sha256:https://get.helm.sh/{{ helm_tarball }}.sha256sum"
+        dest: "/tmp/{{ helm_tarball }}"
+        mode: "0644"
+
+    - name: Unpack Helm
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ helm_tarball }}"
+        dest: /tmp
+        remote_src: true
+
+    - name: Install Helm binary
+      ansible.builtin.copy:
+        src: "/tmp/linux-{{ helm_arch }}/helm"
+        dest: /usr/local/bin/helm
+        remote_src: true
+        mode: "0755"
+
+- name: Add Helm repositories
+  ansible.builtin.command: helm repo add {{ item.name }} {{ item.url }} --force-update
+  loop:
+    - { name: projectcalico, url: "https://docs.tigera.io/calico/charts" }
+    - { name: metallb, url: "https://metallb.github.io/metallb" }
+    - { name: traefik, url: "https://traefik.github.io/charts" }
+    - { name: longhorn, url: "https://charts.longhorn.io" }
+  changed_when: false
+
+- name: Refresh Helm repository indexes
+  ansible.builtin.command: helm repo update
+  changed_when: false
+
+# ---------------------------------------------------------------- CNI first
+- name: Install Calico (CNI + NetworkPolicy enforcement)
+  ansible.builtin.include_tasks: helm_release.yml
+  vars:
+    release: calico
+    release_namespace: tigera-operator
+    chart_ref: projectcalico/tigera-operator
+    chart_name: tigera-operator
+    chart_version: "{{ calico_version }}"
+    values_template: calico-values.yaml.j2
+
+- name: Wait until Calico reports Available
+  ansible.builtin.command: kubectl wait --for=condition=Available tigerastatus/calico --timeout=30s
+  register: calico_ready
+  until: calico_ready.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for every node to become Ready
+  ansible.builtin.command: kubectl wait --for=condition=Ready nodes --all --timeout=600s
+  changed_when: false
+
+# ---------------------------------------------------------- Load balancer
+- name: Install MetalLB
+  ansible.builtin.include_tasks: helm_release.yml
+  vars:
+    release: metallb
+    release_namespace: metallb-system
+    chart_ref: metallb/metallb
+    chart_name: metallb
+    chart_version: "{{ metallb_chart_version }}"
+    values_template: metallb-values.yaml.j2
+
+- name: Label metallb-system for the privileged speaker DaemonSet
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - label
+      - namespace
+      - metallb-system
+      - --overwrite
+      - pod-security.kubernetes.io/enforce=privileged
+      - pod-security.kubernetes.io/audit=privileged
+      - pod-security.kubernetes.io/warn=privileged
+  changed_when: false
+
+- name: Render MetalLB address pool
+  ansible.builtin.template:
+    src: metallb-pool.yaml.j2
+    dest: /etc/k8s-platform/addons/metallb-pool.yaml
+    mode: "0600"
+
+- name: Apply MetalLB address pool (retry until the webhook is serving)
+  ansible.builtin.command: kubectl apply -f /etc/k8s-platform/addons/metallb-pool.yaml
+  register: pool_apply
+  until: pool_apply.rc == 0
+  retries: 20
+  delay: 6
+  changed_when: "'configured' in pool_apply.stdout or 'created' in pool_apply.stdout"
+
+# --------------------------------------------------------------- Ingress
+- name: Install Traefik ingress controller
+  ansible.builtin.include_tasks: helm_release.yml
+  vars:
+    release: traefik
+    release_namespace: traefik
+    chart_ref: traefik/traefik
+    chart_name: traefik
+    chart_version: "{{ traefik_chart_version }}"
+    values_template: traefik-values.yaml.j2
+
+# --------------------------------------------------------------- Storage
+- name: Install Longhorn replicated block storage
+  ansible.builtin.include_tasks: helm_release.yml
+  vars:
+    release: longhorn
+    release_namespace: longhorn-system
+    chart_ref: longhorn/longhorn
+    chart_name: longhorn
+    chart_version: "{{ longhorn_chart_version }}"
+    values_template: longhorn-values.yaml.j2
+
+- name: Print the ingress IP assigned by MetalLB
+  ansible.builtin.command: >-
+    kubectl -n traefik get svc traefik
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+  register: ingress_ip
+  until: ingress_ip.stdout | length > 0
+  retries: 20
+  delay: 5
+  changed_when: false
+
+- name: Show ingress address
+  ansible.builtin.debug:
+    msg: "Ingress (Traefik) is reachable at {{ ingress_ip.stdout }}. Point *.apps DNS here."
