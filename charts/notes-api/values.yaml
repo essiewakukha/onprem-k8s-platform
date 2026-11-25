@@ -1,0 +1,138 @@
+# Default values for notes-api. Environment overrides live in
+# values-production.yaml; CI only ever sets image.tag.
+
+replicaCount: 3
+
+image:
+  repository: registry.internal.example:5000/demo/notes-api
+  # Immutable tag set by CI (git SHA). Defaults to .Chart.AppVersion.
+  tag: ""
+  # Optional: pin by digest (sha256:...). Takes precedence over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+containerPort: 8080
+
+# Extra environment variables: list of {name, value} or valueFrom entries.
+extraEnv: []
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: traefik
+  host: notes.apps.lab.internal
+  annotations: {}
+  # Name of an existing kubernetes.io/tls Secret. Empty = plain HTTP.
+  tlsSecretName: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    # No CPU limit on purpose: avoids CFS throttling latency spikes.
+    memory: 256Mi
+
+# ---------------------------------------------------------------- rollout
+rollout:
+  # Bring a new pod up before taking an old one down: capacity never dips.
+  maxSurge: 1
+  maxUnavailable: 0
+  # A new pod must stay Ready this long before it counts as available.
+  minReadySeconds: 10
+  # Fail the rollout (and let Helm roll back) if it stalls this long.
+  progressDeadlineSeconds: 300
+  revisionHistoryLimit: 5
+
+terminationGracePeriodSeconds: 30
+# App keeps serving this long after SIGTERM while endpoints update.
+shutdownDrainMs: 5000
+
+probes:
+  startup:
+    path: /healthz
+    periodSeconds: 2
+    failureThreshold: 30
+  readiness:
+    path: /readyz
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 2
+  liveness:
+    path: /healthz
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+# ----------------------------------------------------- node failure tuning
+nodeFailure:
+  # Evict pods from a NotReady/unreachable node after this many seconds
+  # (Kubernetes default is 300).
+  tolerationSeconds: 30
+
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  # ScheduleAnyway keeps pods schedulable when a node is down.
+  whenUnsatisfiable: ScheduleAnyway
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---------------------------------------------------------------- storage
+persistence:
+  enabled: true
+  # Longhorn replicates the volume across nodes; RWX lets every replica mount it.
+  storageClass: longhorn
+  accessMode: ReadWriteMany
+  size: 1Gi
+  mountPath: /data
+  # Use a PVC created outside the chart.
+  existingClaim: ""
+  # Keep the PVC (and data) when the release is uninstalled.
+  keepOnUninstall: true
+
+# --------------------------------------------------------------- network
+networkPolicy:
+  enabled: true
+  # Namespace of the ingress controller allowed to reach the pods.
+  ingressControllerNamespace: traefik
+  # Extra egress rules (NetworkPolicyEgressRule list), e.g. a database.
+  extraEgress: []
+
+tests:
+  enabled: true

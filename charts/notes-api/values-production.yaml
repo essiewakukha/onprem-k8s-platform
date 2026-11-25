@@ -1,0 +1,12 @@
+# Production overrides. Keep this small: anything here is a deliberate
+# difference from the defaults.
+replicaCount: 3
+
+image:
+  repository: registry.internal.example:5000/demo/notes-api
+
+ingress:
+  host: notes.apps.lab.internal
+
+persistence:
+  size: 5Gi
