@@ -1,0 +1,98 @@
+---
+- name: Check whether this node is already initialised
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: admin_conf
+
+- name: Render kubeadm configuration
+  ansible.builtin.template:
+    src: kubeadm-config.yaml.j2
+    dest: /etc/kubernetes/kubeadm-config.yaml
+    mode: "0600"
+
+- name: Write kube-vip static pod (uses super-admin.conf during first init)
+  ansible.builtin.include_role:
+    name: kube_vip
+  vars:
+    kube_vip_kubeconfig: /etc/kubernetes/super-admin.conf
+  when:
+    - kube_vip_enabled
+    - not admin_conf.stat.exists
+
+- name: Pre-pull control-plane images (makes init deterministic and faster)
+  ansible.builtin.command: kubeadm config images pull --config /etc/kubernetes/kubeadm-config.yaml
+  when: not admin_conf.stat.exists
+  changed_when: true
+
+- name: Run kubeadm init
+  ansible.builtin.command: >-
+    kubeadm init
+    --config /etc/kubernetes/kubeadm-config.yaml
+    --upload-certs
+  when: not admin_conf.stat.exists
+  register: kubeadm_init
+  changed_when: true
+
+- name: Switch kube-vip to admin.conf now that RBAC is bootstrapped
+  ansible.builtin.replace:
+    path: /etc/kubernetes/manifests/kube-vip.yaml
+    regexp: '/etc/kubernetes/super-admin.conf'
+    replace: '/etc/kubernetes/admin.conf'
+  when: kube_vip_enabled
+
+- name: Create kubeconfig directory for root and the admin user
+  ansible.builtin.file:
+    path: "{{ item.home }}/.kube"
+    state: directory
+    owner: "{{ item.user }}"
+    mode: "0700"
+  loop:
+    - { home: /root, user: root }
+    - { home: "/home/{{ ansible_user }}", user: "{{ ansible_user }}" }
+
+- name: Install admin kubeconfig for root and the admin user
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ item.home }}/.kube/config"
+    remote_src: true
+    owner: "{{ item.user }}"
+    mode: "0600"
+  loop:
+    - { home: /root, user: root }
+    - { home: "/home/{{ ansible_user }}", user: "{{ ansible_user }}" }
+
+- name: Fetch admin kubeconfig to the controller (artifacts/ is git-ignored)
+  ansible.builtin.fetch:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ playbook_dir }}/../artifacts/admin.conf"
+    flat: true
+
+- name: Wait for the API server to answer through the control-plane endpoint
+  ansible.builtin.command: kubectl get --raw=/readyz
+  register: api_ready
+  until: api_ready.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+# Join credentials are re-created on every run (tokens expire after 24h),
+# so re-running the playbook to add a node always works.
+- name: Create a worker join command
+  ansible.builtin.command: kubeadm token create --ttl 2h --print-join-command
+  register: join_cmd
+  changed_when: true
+
+- name: Upload control-plane certificates and get the decryption key
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubeadm init phase upload-certs --upload-certs --config /etc/kubernetes/kubeadm-config.yaml | tail -1
+  args:
+    executable: /bin/bash
+  register: cert_key
+  when: groups['control_plane'] | length > 1
+  changed_when: true
+
+- name: Share join facts with the other plays
+  ansible.builtin.set_fact:
+    kubeadm_join_command: "{{ join_cmd.stdout | trim }}"
+    kubeadm_certificate_key: "{{ cert_key.stdout | default('') | trim }}"

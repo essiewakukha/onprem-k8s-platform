@@ -1,0 +1,33 @@
+# Managed by Ansible (k8s-platform). Rendered for {{ inventory_hostname }}.
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: "{{ ansible_host }}"
+  bindPort: 6443
+nodeRegistration:
+  name: "{{ inventory_hostname }}"
+  criSocket: unix:///run/containerd/containerd.sock
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: "v{{ kubernetes_version }}"
+clusterName: "k8s-platform"
+controlPlaneEndpoint: "{{ control_plane_endpoint }}:6443"
+networking:
+  podSubnet: "{{ pod_cidr }}"
+  serviceSubnet: "{{ service_cidr }}"
+apiServer:
+  certSANs:
+    - "{{ control_plane_endpoint }}"
+{% for host in groups['control_plane'] %}
+    - "{{ hostvars[host]['ansible_host'] }}"
+    - "{{ host }}"
+{% endfor %}
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+# cgroup driver is discovered from containerd (SystemdCgroup = true).
+serverTLSBootstrap: false
+rotateCertificates: true
+shutdownGracePeriod: 30s
+shutdownGracePeriodCriticalPods: 10s
