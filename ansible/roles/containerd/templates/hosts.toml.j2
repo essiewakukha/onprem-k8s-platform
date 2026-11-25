@@ -1,0 +1,11 @@
+# Managed by Ansible (k8s-platform). Registry: {{ registry_host }}
+server = "{{ 'http' if registry_insecure else 'https' }}://{{ registry_host }}"
+
+[host."{{ 'http' if registry_insecure else 'https' }}://{{ registry_host }}"]
+  capabilities = ["pull", "resolve"]
+{% if registry_ca_file | length > 0 %}
+  ca = "/etc/containerd/certs.d/{{ registry_host }}/ca.crt"
+{% endif %}
+{% if registry_insecure %}
+  skip_verify = true
+{% endif %}
