@@ -1,0 +1,16 @@
+{{- if and .Values.podDisruptionBudget.enabled (gt (int .Values.replicaCount) 1) }}
+# Limits voluntary disruptions (kubectl drain, node upgrades) so the app
+# always keeps capacity while nodes are maintained one at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "notes-api.fullname" . }}
+  labels:
+    {{- include "notes-api.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "notes-api.selectorLabels" . | nindent 6 }}
+{{- end }}

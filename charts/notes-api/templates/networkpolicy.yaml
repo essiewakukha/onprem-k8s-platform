@@ -1,0 +1,70 @@
+{{- if .Values.networkPolicy.enabled }}
+# Works on top of the namespace baseline (platform/20-networkpolicy-baseline.yaml),
+# which denies everything and allows DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "notes-api.fullname" . }}-ingress
+  labels:
+    {{- include "notes-api.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "notes-api.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # From the ingress controller only.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.containerPort }}
+    # From this release's own `helm test` pod.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: smoke-test
+      ports:
+        - protocol: TCP
+          port: {{ .Values.containerPort }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "notes-api.fullname" . }}-test-egress
+  labels:
+    {{- include "notes-api.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: smoke-test
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "notes-api.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.containerPort }}
+{{- with .Values.networkPolicy.extraEgress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "notes-api.fullname" $ }}-extra-egress
+  labels:
+    {{- include "notes-api.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "notes-api.selectorLabels" $ | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}
