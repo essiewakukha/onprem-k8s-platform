@@ -1,0 +1,111 @@
+---
+- name: Assert supported operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version == '22.04'
+    fail_msg: "This playbook targets Ubuntu 22.04; found {{ ansible_distribution }} {{ ansible_distribution_version }}."
+
+- name: Check cgroup filesystem type
+  ansible.builtin.command: stat -fc %T /sys/fs/cgroup/
+  register: cgroup_fs
+  changed_when: false
+
+- name: Assert cgroup v2 (required for containerd 2.x and current kubelets)
+  ansible.builtin.assert:
+    that: cgroup_fs.stdout == 'cgroup2fs'
+    fail_msg: "Node uses {{ cgroup_fs.stdout }}. Enable the unified cgroup hierarchy before continuing."
+
+- name: Assert minimum resources
+  ansible.builtin.assert:
+    that:
+      - ansible_processor_vcpus >= 2
+      - ansible_memtotal_mb >= 1800
+    fail_msg: "kubeadm needs at least 2 vCPU and ~2 GB RAM per node."
+
+- name: Set hostname to the inventory name
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Add every cluster node to /etc/hosts for deterministic name resolution
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} k8s-platform nodes"
+    block: |
+      {% for host in groups['k8s_cluster'] %}
+      {{ hostvars[host]['ansible_host'] }} {{ host }}
+      {% endfor %}
+
+- name: Disable swap now
+  ansible.builtin.command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+  changed_when: true
+
+- name: Disable swap permanently
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s.*)$'
+    replace: '# \1'
+
+- name: Load kernel modules required by containerd and Kubernetes networking
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Configure sysctl for Kubernetes networking
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: true
+  loop: "{{ sysctl_settings | dict2items }}"
+  vars:
+    sysctl_settings:
+      net.bridge.bridge-nf-call-iptables: 1
+      net.bridge.bridge-nf-call-ip6tables: 1
+      net.ipv4.ip_forward: 1
+      fs.inotify.max_user_instances: 512
+      fs.inotify.max_user_watches: 524288
+
+- name: Install base packages (open-iscsi and nfs-common are Longhorn prerequisites)
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gpg
+      - jq
+      - open-iscsi
+      - nfs-common
+      - cryptsetup
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable iscsid for Longhorn volumes
+  ansible.builtin.systemd_service:
+    name: iscsid
+    enabled: true
+    state: started
+
+- name: Stop multipathd from claiming Longhorn block devices
+  ansible.builtin.blockinfile:
+    path: /etc/multipath.conf
+    create: true
+    mode: "0644"
+    marker: "# {mark} k8s-platform longhorn"
+    block: |
+      blacklist {
+          devnode "^sd[a-z0-9]+"
+      }
+  notify: Restart multipathd
+
+- name: Create keyrings directory for apt repositories
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"

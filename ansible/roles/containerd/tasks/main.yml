@@ -1,0 +1,106 @@
+---
+- name: Add Docker apt signing key (source of the containerd.io package)
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+    filename: docker
+    state: present
+
+- name: Install pinned containerd
+  ansible.builtin.apt:
+    name: "containerd.io={{ containerd_package_version }}"
+    state: present
+    update_cache: true
+    allow_change_held_packages: true
+
+- name: Hold containerd so unattended upgrades cannot change it
+  ansible.builtin.dpkg_selections:
+    name: containerd.io
+    selection: hold
+
+- name: Check whether config.toml is already managed by this playbook
+  ansible.builtin.command:
+    argv: [grep, -q, "^# managed-by: k8s-platform", /etc/containerd/config.toml]
+  register: containerd_managed
+  changed_when: false
+  failed_when: false
+
+# The containerd.io package ships a config with the CRI plugin disabled.
+# Replace it with the full default config, then make targeted edits.
+- name: Generate full default containerd config
+  ansible.builtin.shell: |
+    set -o pipefail
+    { echo '# managed-by: k8s-platform'; containerd config default; } > /etc/containerd/config.toml
+  args:
+    executable: /bin/bash
+  when: containerd_managed.rc != 0
+  changed_when: true
+  notify: Restart containerd
+
+- name: Use the systemd cgroup driver for runc
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
+  notify: Restart containerd
+
+- name: Point the registry config_path at certs.d
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: "config_path = ''"
+    replace: "config_path = '/etc/containerd/certs.d'"
+  notify: Restart containerd
+
+- name: Verify containerd config contains the required settings
+  ansible.builtin.command: grep -E "{{ item }}" /etc/containerd/config.toml
+  loop:
+    - 'SystemdCgroup = true'
+    - "config_path = '/etc/containerd/certs.d"
+  changed_when: false
+
+- name: Create registry host directory
+  ansible.builtin.file:
+    path: "/etc/containerd/certs.d/{{ registry_host }}"
+    state: directory
+    mode: "0755"
+
+- name: Install internal registry CA
+  ansible.builtin.copy:
+    src: "{{ registry_ca_file }}"
+    dest: "/etc/containerd/certs.d/{{ registry_host }}/ca.crt"
+    mode: "0644"
+  when: registry_ca_file | length > 0
+  notify: Restart containerd
+
+- name: Configure containerd to trust the internal registry
+  ansible.builtin.template:
+    src: hosts.toml.j2
+    dest: "/etc/containerd/certs.d/{{ registry_host }}/hosts.toml"
+    mode: "0644"
+  notify: Restart containerd
+
+- name: Configure crictl to talk to containerd
+  ansible.builtin.copy:
+    dest: /etc/crictl.yaml
+    mode: "0644"
+    content: |
+      runtime-endpoint: unix:///run/containerd/containerd.sock
+      image-endpoint: unix:///run/containerd/containerd.sock
+      timeout: 10
+
+- name: Enable and start containerd
+  ansible.builtin.systemd_service:
+    name: containerd
+    enabled: true
+    state: started
+
+- name: Apply pending containerd restarts before continuing
+  ansible.builtin.meta: flush_handlers
