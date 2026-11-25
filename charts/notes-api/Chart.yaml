@@ -1,0 +1,10 @@
+apiVersion: v2
+name: notes-api
+description: Production-ready chart for the notes-api service on the on-prem platform.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.30.0-0"
+keywords: [notes, demo, on-prem]
+maintainers:
+  - name: Esther Mwakukha
