@@ -1,0 +1,114 @@
+name: Deploy
+
+# Build -> push to the internal registry -> Helm rollout -> smoke test.
+# Runs on a self-hosted runner inside your network (the registry and the
+# API server are not reachable from GitHub-hosted runners).
+#
+# Required repository secrets:
+#   REGISTRY_USERNAME / REGISTRY_PASSWORD  internal registry credentials
+#   KUBECONFIG_B64                         base64 of artifacts/ci-deployer.kubeconfig
+# Required repository variable:
+#   IMAGE_REPOSITORY  e.g. registry.internal.example:5000/demo/notes-api
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "charts/**"
+      - "scripts/deploy.sh"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Redeploy an existing image tag (skip build). Leave empty to build HEAD."
+        required: false
+
+permissions:
+  contents: read
+
+# Never run two deploys at once; never cancel one half-way.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: ${{ vars.IMAGE_REPOSITORY }}
+
+jobs:
+  build:
+    name: Build and push image
+    if: github.event.inputs.image_tag == ''
+    runs-on: [self-hosted, linux, onprem]
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: meta
+        name: Compute immutable tag
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to internal registry
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          registry="${IMAGE_REPOSITORY%%/*}"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$registry" -u "$REGISTRY_USERNAME" --password-stdin
+
+      - name: Build and push
+        run: |
+          image="${IMAGE_REPOSITORY}:${{ steps.meta.outputs.tag }}"
+          docker build \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --label org.opencontainers.image.source="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -t "$image" app
+          docker push "$image"
+          echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Roll out to cluster
+    needs: [build]
+    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: [self-hosted, linux, onprem]
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.36.4
+
+      - name: Write scoped kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          umask 077
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        env:
+          IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.tag }}
+        run: ./scripts/deploy.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Release status"
+            echo '```'
+            helm history notes-api -n notes --max 5 || true
+            echo
+            kubectl -n notes get pods -o wide || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/kubeconfig"

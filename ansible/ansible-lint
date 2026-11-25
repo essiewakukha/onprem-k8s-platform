@@ -1,0 +1,11 @@
+---
+profile: production
+exclude_paths:
+  - inventory/
+skip_list:
+  # Roles are referenced by relative path from site.yml; no galaxy metadata.
+  - meta-no-info
+  - role-name[path]
+  # Join facts (kubeadm_join_command, kubeadm_certificate_key) are shared
+  # across roles on purpose, so role-prefixed names would be misleading.
+  - var-naming[no-role-prefix]
