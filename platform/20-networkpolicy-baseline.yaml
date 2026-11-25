@@ -1,0 +1,37 @@
+# Zero-trust baseline for the namespace: nothing in or out unless a more
+# specific policy (shipped with the Helm chart) allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: notes
+  labels:
+    app.kubernetes.io/part-of: k8s-platform-baseline
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Every pod needs DNS. Allow it to CoreDNS only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: notes
+  labels:
+    app.kubernetes.io/part-of: k8s-platform-baseline
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

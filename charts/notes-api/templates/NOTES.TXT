@@ -1,0 +1,16 @@
+notes-api {{ include "notes-api.imageTag" . }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Watch the rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "notes-api.fullname" . }}
+
+See which node each replica landed on:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }} -o wide
+
+{{- if .Values.ingress.enabled }}
+
+Reach it through the ingress:
+  curl -s http{{ if .Values.ingress.tlsSecretName }}s{{ end }}://{{ .Values.ingress.host }}/
+{{- end }}
+
+Run the smoke test:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs

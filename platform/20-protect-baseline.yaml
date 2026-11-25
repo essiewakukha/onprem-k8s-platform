@@ -1,0 +1,34 @@
+# The CI identity may create/edit its own NetworkPolicies (the chart ships
+# some), so plain RBAC cannot stop it from deleting the namespace baseline.
+# This admission policy can: any ServiceAccount trying to change or delete a
+# NetworkPolicy labelled as platform baseline is rejected. Cluster admins
+# (human users, Ansible) are unaffected.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: protect-platform-baseline
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["networkpolicies"]
+  matchConditions:
+    - name: is-baseline-object
+      expression: >-
+        has(oldObject.metadata.labels) &&
+        'app.kubernetes.io/part-of' in oldObject.metadata.labels &&
+        oldObject.metadata.labels['app.kubernetes.io/part-of'] == 'k8s-platform-baseline'
+  validations:
+    - expression: "!request.userInfo.username.startsWith('system:serviceaccount:')"
+      message: "Platform baseline NetworkPolicies can only be changed by cluster administrators."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: protect-platform-baseline
+spec:
+  policyName: protect-platform-baseline
+  validationActions: [Deny]

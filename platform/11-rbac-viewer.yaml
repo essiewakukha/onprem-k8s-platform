@@ -1,0 +1,38 @@
+# Read-only access for developers/on-call. Bind people via the group name
+# (client-certificate O= field, or your OIDC groups claim). No Secret access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-viewer
+  namespace: notes
+rules:
+  - apiGroups: ["", apps, networking.k8s.io, policy, discovery.k8s.io]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - endpointslices
+      - events
+      - configmaps
+      - persistentvolumeclaims
+      - deployments
+      - replicasets
+      - ingresses
+      - networkpolicies
+      - poddisruptionbudgets
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-viewers
+  namespace: notes
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: notes-viewers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: app-viewer
