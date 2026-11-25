@@ -1,0 +1,43 @@
+---
+# Full cluster build. Safe to re-run: every step checks state first.
+#   ansible-playbook site.yml
+
+- name: Preflight checks and node preparation
+  hosts: k8s_cluster
+  become: true
+  tags: [prep]
+  roles:
+    - common
+    - containerd
+    - kubernetes
+
+- name: Initialise the first control-plane node
+  hosts: control_plane[0]
+  become: true
+  tags: [control-plane]
+  roles:
+    - control_plane_init
+
+- name: Join additional control-plane nodes
+  hosts: control_plane[1:]
+  become: true
+  serial: 1
+  tags: [control-plane]
+  roles:
+    - control_plane_join
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  tags: [workers]
+  roles:
+    - worker_join
+
+- name: Install cluster add-ons and the platform baseline
+  hosts: control_plane[0]
+  become: true
+  tags: [addons]
+  roles:
+    - addons
+    - platform
+    - etcd_backup

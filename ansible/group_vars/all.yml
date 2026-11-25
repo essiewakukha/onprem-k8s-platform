@@ -1,0 +1,65 @@
+---
+# ---------------------------------------------------------------------------
+# Single source of truth for versions. Bump here, re-run the playbook.
+# See VERSIONS.md for the compatibility notes behind each pin.
+# ---------------------------------------------------------------------------
+kubernetes_version: "1.36.4"
+kubernetes_minor: "{{ kubernetes_version.split('.')[0:2] | join('.') }}"
+kubernetes_package_version: "{{ kubernetes_version }}-1.1"
+
+# containerd.io from Docker's apt repo. Kubernetes 1.36 needs containerd 2.x.
+# The apt glob pins the minor; record-versions.sh captures the exact patch.
+containerd_package_version: "2.2.*"
+
+helm_version: "v4.3.0"
+calico_version: "v3.32.1"
+metallb_chart_version: "0.16.1"
+traefik_chart_version: "41.3.0"
+longhorn_chart_version: "1.11.3"
+kube_vip_version: "v1.2.0"
+
+# ---------------------------------------------------------------------------
+# Networking
+# ---------------------------------------------------------------------------
+# Must not overlap your LAN/VM network.
+pod_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+# Stable address for the API server. Use a DNS name or the kube-vip VIP so
+# you can add control-plane nodes later without re-issuing certificates.
+control_plane_endpoint: "{{ kube_vip_address if kube_vip_enabled else hostvars[groups['control_plane'][0]]['ansible_host'] }}"
+
+# Optional HA control plane: floating VIP announced via ARP by kube-vip.
+kube_vip_enabled: false
+kube_vip_address: "192.168.10.10"
+kube_vip_interface: "ens18"
+
+# MetalLB L2 pool for LoadBalancer Services (Traefik gets the first IP).
+# Reserve this range in DHCP so nothing else claims it.
+metallb_ip_range: "192.168.10.240-192.168.10.250"
+
+# ---------------------------------------------------------------------------
+# Internal registry (already exists; we only teach containerd to trust it)
+# ---------------------------------------------------------------------------
+registry_host: "registry.internal.example:5000"
+# Path on the Ansible controller to the registry CA (PEM). Empty = public CA.
+registry_ca_file: ""
+# Only for lab registries served over plain HTTP. Never in production.
+registry_insecure: false
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+# Longhorn keeps this many copies of each volume on different nodes.
+longhorn_replica_count: 2
+
+# ---------------------------------------------------------------------------
+# etcd snapshots on the first control-plane node
+# ---------------------------------------------------------------------------
+etcd_backup_dir: "/var/backups/etcd"
+etcd_backup_retention_days: 7
+
+# ---------------------------------------------------------------------------
+# Application namespace managed by the platform baseline
+# ---------------------------------------------------------------------------
+app_namespace: "notes"

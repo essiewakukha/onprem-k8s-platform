@@ -1,0 +1,22 @@
+# Copy to hosts.ini and edit. hosts.ini is git-ignored.
+#
+# Minimum for node-failure tolerance: 1 control plane + 2 workers.
+# Recommended: 3 control planes (set kube_vip_enabled=true) + 3 workers.
+
+[control_plane]
+cp1 ansible_host=192.168.10.11
+# cp2 ansible_host=192.168.10.12
+# cp3 ansible_host=192.168.10.13
+
+[workers]
+wk1 ansible_host=192.168.10.21
+wk2 ansible_host=192.168.10.22
+wk3 ansible_host=192.168.10.23
+
+[k8s_cluster:children]
+control_plane
+workers
+
+[k8s_cluster:vars]
+ansible_user=ubuntu
+ansible_python_interpreter=/usr/bin/python3
